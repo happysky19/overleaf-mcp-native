@@ -24,16 +24,6 @@ interface Cookie {
   domain?: string;
 }
 
-function configRoot(): string {
-  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support");
-  if (process.platform === "win32") return process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
-  return process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
-}
-
-export function profileDir(): string {
-  return path.join(configRoot(), "overleaf-mcp", "chrome-profile");
-}
-
 async function readDevToolsPort(profile: string, deadline: number): Promise<{ port: number; path: string }> {
   const file = path.join(profile, "DevToolsActivePort");
   while (Date.now() < deadline) {
@@ -114,19 +104,18 @@ export async function captureCookie(baseUrl: string, opts: CaptureOpts = {}): Pr
   if (injectedSessionMode) throw new Error("Injected session cannot launch a browser; refresh through the launcher.");
   const config = loadConfig();
   const chromePath = await findChrome(config.browserPath);
-  const profile = profileDir();
-  await fs.mkdir(profile, { recursive: true });
-
-  // Remove any DevToolsActivePort left behind by a previous Chrome — if we
-  // read a stale file, we'd try to connect to a port that nothing is bound
-  // to and surface as ECONNREFUSED to the caller. Deleting before spawn
-  // means the file's reappearance is a positive signal that the just-
-  // spawned Chrome is actually listening.
-  await fs.rm(path.join(profile, "DevToolsActivePort"), { force: true });
+  // Throwaway profile: Chrome's Cookies SQLite would hold the session (with
+  // --use-mock-keychain its key is a public constant), so the whole dir is
+  // removed once Chrome has exited (see finally).
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), "overleaf-mcp-chrome-"));
 
   const args = chromeFlags(profile, config.insecure);
   logger.info(`launching ${chromePath} (profile=${profile})`);
   const child = spawn(chromePath, args, { stdio: "ignore", detached: false });
+  // Registered at spawn so an exit (by code or signal) that happens before `finally` is not missed.
+  const exited = new Promise<void>((r) => child.once("exit", () => r()));
+  const hasExited = () => child.exitCode !== null || child.signalCode !== null;
+  const waitExit = (ms: number) => Promise.race([exited, new Promise<void>((r) => setTimeout(r, ms).unref())]);
 
   let earlyExitErr: Error | null = null;
   child.once("exit", (code, signal) => {
@@ -191,9 +180,14 @@ export async function captureCookie(baseUrl: string, opts: CaptureOpts = {}): Pr
     // Don't reach into the browser process; let it exit on its own when the
     // user closes the window. The dedicated profile means it doesn't matter
     // if the window lingers after login.
-    if (child.exitCode === null) {
+    if (!hasExited()) {
       // Gentle close — Chrome handles SIGTERM by saving session and quitting.
       try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      await waitExit(5_000);
+      if (!hasExited()) { try { child.kill("SIGKILL"); } catch { /* ignore */ } await waitExit(2_000); }
     }
+    // Chrome helpers may still be writing; retry, and never let a cleanup error replace a captured cookie.
+    await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      .catch((err) => logger.warn(`could not remove temp profile ${profile}: ${(err as Error).message}`));
   }
 }

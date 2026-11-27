@@ -184,21 +184,21 @@ Then point your MCP config at the built file:
 
 ## Authentication
 
-The session cookie lives in a plaintext file at `<configDir>/overleaf-mcp/cookie.json` (mode 0600), where `<configDir>` is `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` (or `~/.config`) on Linux, `%APPDATA%` on Windows. The CSRF token is auto-discovered from the `/project` page on each session — no separate copy needed.
+(Local branch `keychain`, macOS only.) The session cookie lives in the macOS Keychain (service `overleaf-mcp`, account = Overleaf host), never in a file; `tests/keychain-oracle.sh` checks it. The CSRF token is auto-discovered from the `/project` page on each session — no separate copy needed.
 
 ### How the cookie gets there
 
-`npx @netique/overleaf-mcp login` — or an MCP tool call that finds no stored cookie — spawns Chrome with a **dedicated browser profile** at `<configDir>/overleaf-mcp/chrome-profile/`, points it at `${OL_BASE_URL}/project`, and reads the session cookie via the Chrome DevTools Protocol once the dashboard loads. Why a dedicated profile:
+`npx @netique/overleaf-mcp login` — or an MCP tool call that finds no stored cookie — spawns Chrome with a **throwaway browser profile** in a temp dir, deleted once Chrome exits (so you log in afresh each time), points it at `${OL_BASE_URL}/project`, and reads the session cookie via the Chrome DevTools Protocol once the dashboard loads. Why a dedicated profile:
 
 - We don't touch your real Chrome profile, so there's no macOS Keychain prompt for your everyday browser.
 - It's a real interactive Chrome window, so captcha, Google OAuth, ORCID, institutional SSO and 2FA all work out of the box.
-- The profile persists. Re-logins are usually a flash: window opens → /project loads → cookie captured → window closes.
+- The profile does not persist (it would hold the session in Chrome's Cookies file), so each re-login (~5 days) is a full sign-in.
 
 When the cookie expires (Overleaf cookies last ~5 days), the next request hits a 302 to `/login`, overleaf-mcp evicts the stale entry, re-launches Chrome and captures a fresh one. If your browser session also expired, the Chrome window waits for you to log in (up to 5 minutes).
 
 Any Chromium-family browser works — Chrome, Brave, Edge, Arc, Chromium. If `findChrome` can't locate one automatically, set `OL_BROWSER` to a binary path.
 
-> ⚠️ The session cookie grants full account access. The cookie file is mode 0600 but plaintext on disk. Treat it like a password. Remove it with `overleaf-mcp logout --confirm`.
+> ⚠️ The session cookie grants full account access. It is kept in the Keychain only. Treat it like a password. Remove it with `overleaf-mcp logout --confirm`.
 
 ### Environment variables
 

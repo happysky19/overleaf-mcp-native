@@ -7,7 +7,7 @@ import { stdin, stdout } from "node:process";
 import { loadConfig } from "../config.js";
 import { validateCookie, clearIdentity } from "../session/identity.js";
 import { OverleafAuthError } from "../api/errors.js";
-import { saveStored, clearStored, loadStored, cookieFilePath } from "./cookieStore.js";
+import { saveStored, clearStored, loadStored, storeLabel } from "./cookieStore.js";
 import { captureCookie } from "./browserLogin.js";
 
 function writeOut(line: string): void {
@@ -20,7 +20,7 @@ function hostOf(baseUrl: string): string {
 
 async function runLogin(): Promise<number> {
   const config = loadConfig();
-  writeOut(`opening a Chrome window for ${hostOf(config.baseUrl)} (a profile dedicated to overleaf-mcp).`);
+  writeOut(`opening a Chrome window for ${hostOf(config.baseUrl)} (a throwaway profile, deleted after capture).`);
   writeOut("complete login normally — captcha, SSO, 2FA all work because it's a real browser.");
   let cookie: string;
   try {
@@ -34,7 +34,7 @@ async function runLogin(): Promise<number> {
   try {
     const id = await validateCookie(cookie);
     writeOut(`logged in as ${id.userEmail || id.userId} on ${hostOf(config.baseUrl)}`);
-    writeOut(`saved to ${cookieFilePath()}`);
+    writeOut(`saved to ${storeLabel}`);
     return 0;
   } catch (err) {
     await clearStored(config.baseUrl).catch(() => undefined);
@@ -67,7 +67,7 @@ async function runStatus(): Promise<number> {
   const ageMs = Date.now() - stored.savedAt;
   const days = Math.floor(ageMs / (24 * 60 * 60 * 1000));
   const hours = Math.floor((ageMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-  writeOut(`file: ${cookieFilePath()}`);
+  writeOut(`store: ${storeLabel}`);
   writeOut(`host: ${host}`);
   writeOut(`saved: ${new Date(stored.savedAt).toISOString()} (${days}d ${hours}h ago)`);
   try {
